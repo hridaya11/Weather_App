@@ -1,28 +1,31 @@
-pipeline{
+pipeline {
     agent any // Run on any available agent
 
     environment {
-        DOCKERHUB_CREDENTIALS_ID = 'e09a699a-edc0-415a-a817-b4959eb2ef8e' // ID defined in Jenkins Credentials
-        DOCKER_IMAGE_NAME = "hridaya43/weather-app" // Replace with your Docker Hub username
-        KUBECONFIG_CREDENTIALS_ID = '' // We'll configure kubectl access differently for Minikube
-        K8S_DEPLOYMENT_NAME = 'weather-app-deployment' // Matches metadata.name in deployment.yaml
-        K8S_NAMESPACE = 'default' // Deploy to the default namespace
+        // Use the User-defined ID for your Docker Hub Credentials
+        DOCKERHUB_CREDENTIALS_ID = 'dockerhub-creds'
+        // Make sure this is your correct Docker Hub username and desired image name
+        DOCKER_IMAGE_NAME        = "hridaya43/weather-app"
+        K8S_DEPLOYMENT_NAME      = 'weather-app-deployment' // Matches metadata.name in deployment.yaml
+        K8S_NAMESPACE            = 'default' // Deploy to the default namespace
+        // KUBECONFIG_CREDENTIALS_ID is defined within the Deploy stage
     }
 
     stages {
         stage('Checkout Code') {
             steps {
                 echo 'Checking out code from GitHub...'
-                checkout scm // Checks out the code from the repository configured in the Jenkins job
+                // Checks out the code from the repository configured in the Jenkins job SCM section
+                checkout scm
             }
         }
 
         stage('Build Docker Image') {
             steps {
                 script {
-                    echo "Building Docker image: ${env.DOCKER_IMAGE_NAME}:latest"
+                    echo "Building Docker image: ${env.DOCKER_IMAGE_NAME}:${env.BUILD_NUMBER}"
                     // Use docker.build from Docker Pipeline plugin
-                    def customImage = docker.build("${env.DOCKER_IMAGE_NAME}:${env.BUILD_NUMBER}", "--build-arg BUILD_INFO='Build-${env.BUILD_NUMBER}' .") // Pass build number as arg (optional)
+                    def customImage = docker.build("${env.DOCKER_IMAGE_NAME}:${env.BUILD_NUMBER}", "--build-arg BUILD_INFO='Build-${env.BUILD_NUMBER}' .")
 
                     // Also tag as latest
                     customImage.tag('latest')
@@ -37,6 +40,7 @@ pipeline{
                 script {
                     echo "Pushing Docker image ${env.DOCKER_IMAGE_NAME} to Docker Hub..."
                     // Use docker.withRegistry from Docker Pipeline plugin
+                    // Authenticates using the Jenkins credential specified by DOCKERHUB_CREDENTIALS_ID
                     docker.withRegistry('https://registry.hub.docker.com', env.DOCKERHUB_CREDENTIALS_ID) {
                         // Push the build-number tagged image
                         docker.image("${env.DOCKER_IMAGE_NAME}:${env.BUILD_NUMBER}").push()
@@ -50,35 +54,53 @@ pipeline{
         }
 
         stage('Deploy to Kubernetes') {
-            // This stage runs kubectl commands directly on the Jenkins agent,
-            // assuming kubectl is installed and configured to talk to Minikube.
-            // The jenkins user running this needs access to the KUBECONFIG or ~/.kube/config
-            // Since we started minikube as the host user, and Jenkins runs as 'jenkins',
-            // we might need to ensure the .kube/config is accessible or copy it.
-            // An easier way for Minikube is often to run kubectl directly if installed on the agent.
+            environment {
+                 // Define the ID of the Secret File credential created in Jenkins containing the kubeconfig
+                 KUBECONFIG_CREDENTIAL_ID = 'minikube-config'
+            }
             steps {
                 echo "Deploying application to Kubernetes (Minikube)..."
-                // Ensure kubectl uses the minikube context (usually set by 'minikube start')
-                // If Jenkins runs in a container or different env, you might need 'withKubeConfig'
-                sh "kubectl config use-context minikube"
+                // Use withKubeConfig to securely provide the kubeconfig file
+                // Jenkins makes the file available at the path specified by the KUBECONFIG variable within this block
+                // Ensure the 'Kubernetes CLI' plugin is installed in Jenkins
+                withKubeConfig(credentialsId: env.KUBECONFIG_CREDENTIAL_ID) {
+                    // Now kubectl commands inside this block will use the provided config
 
-                // Apply the deployment and service manifests from the workspace
-                sh "kubectl apply -f deployment.yaml --namespace ${env.K8S_NAMESPACE}"
-                sh "kubectl apply -f service.yaml --namespace ${env.K8S_NAMESPACE}"
+                    echo "Verifying Kubernetes connection using provided kubeconfig..."
+                    sh "kubectl config current-context" // Should show 'minikube'
+                    sh "kubectl get nodes" // Should list the minikube node
 
-                // Optional: Force rollout restart to pick up the 'latest' image if the tag didn't change
-                // Using the BUILD_NUMBER tag directly in deployment.yaml is often better.
-                // Or use kubectl set image command:
-                // sh "kubectl set image deployment/${env.K8S_DEPLOYMENT_NAME} ${env.K8S_DEPLOYMENT_NAME}-container=${env.DOCKER_IMAGE_NAME}:${env.BUILD_NUMBER} --namespace ${env.K8S_NAMESPACE}"
-                sh "kubectl rollout status deployment/${env.K8S_DEPLOYMENT_NAME} --namespace ${env.K8S_NAMESPACE}"
+                    echo "Applying Kubernetes manifests..."
+                    // Apply the deployment and service manifests from the workspace
+                    sh "kubectl apply -f deployment.yaml --namespace ${env.K8S_NAMESPACE}"
+                    sh "kubectl apply -f service.yaml --namespace ${env.K8S_NAMESPACE}"
 
-                echo "Deployment successful."
+                    echo "Checking deployment rollout status..."
+                    // Wait for the deployment rollout to complete successfully
+                    sh "kubectl rollout status deployment/${env.K8S_DEPLOYMENT_NAME} --namespace ${env.K8S_NAMESPACE} --timeout=2m"
 
-                // Display service URL for Minikube
-                sh "echo 'Access application via: ' && minikube service ${env.K8S_DEPLOYMENT_NAME}-service --url --namespace ${env.K8S_NAMESPACE}"
+                    echo "Deployment successful. Determining service access URL..."
+
+                    // Get NodePort and Minikube IP for a more reliable URL in CI environment
+                    sh "kubectl get service ${K8S_DEPLOYMENT_NAME}-service --namespace ${env.K8S_NAMESPACE} -o jsonpath='{.spec.ports[0].nodePort}' > nodeport.txt"
+                    sh "minikube ip > minikubeip.txt"
+                    script {
+                        def nodePort = readFile('nodeport.txt').trim()
+                        def minikubeIp = readFile('minikubeip.txt').trim()
+                        if (nodePort && minikubeIp) {
+                            echo "Access application via: http://${minikubeIp}:${nodePort}"
+                        } else {
+                            echo "Could not reliably determine Minikube service URL using NodePort/IP method."
+                            // Fallback attempt - This might fail in Jenkins depending on environment
+                            echo "Attempting fallback using 'minikube service --url'..."
+                            sh "minikube service ${K8S_DEPLOYMENT_NAME}-service --url --namespace ${env.K8S_NAMESPACE} || echo 'Fallback command minikube service --url failed.'"
+                        }
+                    }
+                    echo "Deployment stage complete."
+                } // End of withKubeConfig block
             }
         }
-    }
+    } // End of stages
 
     post {
         always {
@@ -93,5 +115,5 @@ pipeline{
             echo 'Pipeline failed!'
             // Add notification steps here (e.g., email, Slack)
         }
-    }
-}
+    } // End of post
+} // End of pipeline
