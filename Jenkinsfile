@@ -3,7 +3,7 @@ pipeline {
 
     environment {
         // Use the User-defined ID for your Docker Hub Credentials
-        DOCKERHUB_CREDENTIALS_ID = 'dockerhub-creds'
+        DOCKERHUB_CREDENTIALS_ID = 'e09a699a-edc0-415a-a817-b4959eb2ef8e'
         // Make sure this is your correct Docker Hub username and desired image name
         DOCKER_IMAGE_NAME        = "hridaya43/weather-app"
         K8S_DEPLOYMENT_NAME      = 'weather-app-deployment' // Matches metadata.name in deployment.yaml
