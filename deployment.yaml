@@ -1,0 +1,20 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: weather-app-deployment # Name of the deployment
+spec:
+  replicas: 2 # Start with 2 instances of your app
+  selector:
+    matchLabels:
+      app: weather-app # Pods with this label are managed by this deployment
+  template:
+    metadata:
+      labels:
+        app: weather-app # Label applied to the Pods
+    spec:
+      containers:
+      - name: weather-app-container
+        # IMPORTANT: Replace YOUR_DOCKERHUB_USERNAME
+        image: YOUR_DOCKERHUB_USERNAME/weather-app:latest # Image to use (Jenkins will update the tag)
+        ports:
+        - containerPort: 80 # The port Nginx is listening on inside the container
