@@ -12,9 +12,8 @@ spec:
       labels:
         app: weather-app # Label applied to the Pods
     spec:
-      containers:
-      - name: weather-app-container
-        # IMPORTANT: Replace YOUR_DOCKERHUB_USERNAME
-        image: YOUR_DOCKERHUB_USERNAME/weather-app:latest # Image to use (Jenkins will update the tag)
-        ports:
-        - containerPort: 80 # The port Nginx is listening on inside the container
+     containers:
+     - name: weather-app-container # Or whatever you named it
+       image: hridaya43/weather-app:latest # Or use the build number tag
+       ports:
+       - containerPort: 80 # <<< MUST MATCH NGINX LISTENING PORT
